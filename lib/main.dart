@@ -19,14 +19,34 @@ class DeliveryRouterApp extends StatelessWidget {
         title: 'Delivery Router',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
-          colorSchemeSeed: const Color(0xFF1565C0),
+          colorSchemeSeed: const Color(0xFF4F46E5), // indigo from study-tool
           useMaterial3: true,
           brightness: Brightness.light,
+          scaffoldBackgroundColor: Colors.white,
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFFF8F9FA),
+            foregroundColor: Color(0xFF1A202C),
+            elevation: 0,
+            scrolledUnderElevation: 1,
+          ),
         ),
         darkTheme: ThemeData(
-          colorSchemeSeed: const Color(0xFF1565C0),
+          colorSchemeSeed: const Color(0xFF818CF8), // lighter indigo for dark
           useMaterial3: true,
           brightness: Brightness.dark,
+          scaffoldBackgroundColor: const Color(0xFF0F172A),
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFF1E293B),
+            foregroundColor: Color(0xFFE2E8F0),
+            elevation: 0,
+            scrolledUnderElevation: 1,
+          ),
+          cardTheme: const CardThemeData(
+            color: Color(0xFF1E293B),
+          ),
+          dividerTheme: const DividerThemeData(
+            color: Color(0xFF334155),
+          ),
         ),
         home: const HomeScreen(),
       ),
