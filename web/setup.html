@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<body>
+<p id="status">Setting up test data...</p>
+<script>
+const depot = '{"id":"depot-1","address":"200 Spencer St, Melbourne VIC 3000, Australia","lat":-37.8184,"lng":144.954}';
+const stops = '[{"id":"s1","address":"10 Yarra St, South Yarra VIC 3141, Australia","lat":-37.839,"lng":144.993},{"id":"s2","address":"318 Russell St, Melbourne VIC 3000, Australia","lat":-37.8078,"lng":144.969},{"id":"s3","address":"48 Miller St, Fitzroy North VIC 3068, Australia","lat":-37.7749,"lng":144.9782},{"id":"s4","address":"5 Turnham Ave, Rosanna VIC 3084, Australia","lat":-37.7441,"lng":145.0673},{"id":"s5","address":"122 Church St, Richmond VIC 3121, Australia","lat":-37.8263,"lng":145.001},{"id":"s6","address":"742 Burke Rd, Camberwell VIC 3124, Australia","lat":-37.834,"lng":145.064},{"id":"s7","address":"15 Glenferrie Rd, Malvern VIC 3144, Australia","lat":-37.86,"lng":145.029}]';
+
+// SharedPreferences on web double-JSON-encodes: json.encode(stringValue)
+// So we must JSON.stringify() the string values before storing.
+localStorage.setItem('flutter.depot', JSON.stringify(depot));
+localStorage.setItem('flutter.stops', JSON.stringify(stops));
+
+// Show what's stored
+const keys = [];
+for (let i = 0; i < localStorage.length; i++) {
+  const k = localStorage.key(i);
+  keys.push(k + ' = ' + localStorage.getItem(k).substring(0, 60) + '...');
+}
+document.getElementById('status').innerHTML =
+  '<strong>Stored ' + localStorage.length + ' keys:</strong><br><pre>' +
+  keys.join('\n') + '</pre><br><a href="/">Go to app</a>';
+</script>
+</body>
+</html>
