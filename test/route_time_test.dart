@@ -160,4 +160,92 @@ void main() {
       expect(lateSet2, {0});
     });
   });
+
+  group('repairStopOrder', () {
+    // Simple 4-node graph: 0=depot, 1,2,3=stops
+    // All edges 600s (10 min) for simplicity.
+    final durations = [
+      [0, 600, 600, 600],
+      [600, 0, 600, 600],
+      [600, 600, 0, 600],
+      [600, 600, 600, 0],
+    ];
+
+    test('returns original order when no violations', () {
+      // Depart 480 + 5 leeway = 485. Stop 1 arrive 495, stop 2 arrive 515.
+      // Deadline at node 1: 500 → effective 495. 495 > 495 → false. No violation.
+      final result = RouteProvider.repairStopOrder(
+        stopIndices: [1, 2],
+        durations: durations,
+        startMinutes: 480,
+        deadlineMinutesByNode: {1: 500},
+      );
+      expect(result, [1, 2]);
+    });
+
+    test('reorders deadline stops earliest-first when violated', () {
+      // Order [2, 1]: arrive node 2 at 495, node 1 at 515.
+      // Node 1 deadline 510 → effective 505. 515 > 505 → violated.
+      // Repair: node 1 (deadline 510) before node 2 (no deadline) → [1, 2]
+      final result = RouteProvider.repairStopOrder(
+        stopIndices: [2, 1],
+        durations: durations,
+        startMinutes: 480,
+        deadlineMinutesByNode: {1: 510},
+      );
+      expect(result, [1, 2]);
+    });
+
+    test('inserts non-deadline stop at cheapest position', () {
+      // Asymmetric durations: depot→1=600, depot→2=1200, 1→2=60, 2→1=60
+      // depot→3=600, 1→3=600, 2→3=600, 3→1=600, 3→2=600, 3→depot=600
+      final asym = [
+        [0, 600, 1200, 600],  // from depot
+        [600, 0, 60, 600],    // from 1
+        [1200, 60, 0, 600],   // from 2
+        [600, 600, 600, 0],   // from 3
+      ];
+      // Node 1 has deadline 510. Node 3 has no deadline.
+      // TSP order [3, 1]: arrive 3 at 495, arrive 1 at 515. Node 1 violated.
+      // Repair: deadline stops = [1], free stops = [3].
+      // Start with [1]. Insert 3: try pos 0 vs pos 1.
+      // pos 0: depot→3→1→depot. pos 1: depot→1→3→depot.
+      // Cheapest insertion (including 600s dwell) picks lowest extra time.
+      final result = RouteProvider.repairStopOrder(
+        stopIndices: [3, 1],
+        durations: asym,
+        startMinutes: 480,
+        deadlineMinutesByNode: {1: 510},
+      );
+      // Node 1 must come first (deadline). Node 3 inserted after.
+      expect(result[0], 1);
+      expect(result.length, 2);
+    });
+
+    test('handles multiple deadline stops sorted by time', () {
+      // Nodes 1 and 2 both have deadlines. Node 3 has none.
+      // Order [3, 2, 1]: node 1 arrives last, violates deadline.
+      // Repair: deadlines sorted → [1 (dl=510), 2 (dl=530)], then insert 3.
+      final result = RouteProvider.repairStopOrder(
+        stopIndices: [3, 2, 1],
+        durations: durations,
+        startMinutes: 480,
+        deadlineMinutesByNode: {1: 510, 2: 530},
+      );
+      // Deadline stops in deadline order
+      final idx1 = result.indexOf(1);
+      final idx2 = result.indexOf(2);
+      expect(idx1 < idx2, true, reason: 'Node 1 (earlier deadline) before node 2');
+    });
+
+    test('all stops have deadlines — pure deadline sort', () {
+      final result = RouteProvider.repairStopOrder(
+        stopIndices: [3, 1, 2],
+        durations: durations,
+        startMinutes: 480,
+        deadlineMinutesByNode: {1: 510, 2: 520, 3: 530},
+      );
+      expect(result, [1, 2, 3]);
+    });
+  });
 }

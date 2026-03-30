@@ -220,71 +220,91 @@ class RouteProvider extends ChangeNotifier {
     }
   }
 
-  /// Reorders stops to fix deadline violations. Deadline stops are sorted
-  /// earliest-first; non-deadline stops are inserted at cheapest positions.
-  /// Returns the original order if no violations exist.
+  /// Instance wrapper: converts DeliveryLocation objects to node indices
+  /// and delegates to the static [repairStopOrder].
   List<DeliveryLocation> _repairForDeadlines(
     List<DeliveryLocation> orderedStops,
     List<DeliveryLocation> allLocations,
     List<List<int>> durations,
   ) {
     final startMin = _startTime!.hour * 60 + _startTime!.minute;
-
-    // Check for violations in current order
-    final tour = [0, ...orderedStops.map((s) => allLocations.indexOf(s)), 0];
-    final legs = <int>[];
-    for (var i = 0; i < tour.length - 1; i++) {
-      legs.add(durations[tour[i]][tour[i + 1]]);
-    }
-    final arrivals = computeArrivalMinutes(
-      startMin, legs, orderedStops.length,
-    );
-
-    bool hasViolation = false;
+    final stopIndices = orderedStops
+        .map((s) => allLocations.indexOf(s))
+        .toList();
+    final deadlinesByNode = <int, int>{};
     for (var i = 0; i < orderedStops.length; i++) {
       final dl = _deadlines[orderedStops[i].id];
       if (dl != null) {
-        final dlMin = dl.hour * 60 + dl.minute;
-        if (arrivals[i] > dlMin - _leewayMinutes) {
-          hasViolation = true;
-          break;
-        }
+        deadlinesByNode[stopIndices[i]] = dl.hour * 60 + dl.minute;
       }
     }
-    if (!hasViolation) return orderedStops;
 
-    // Split into deadline and non-deadline stops
-    final withDl = orderedStops
-        .where((s) => _deadlines.containsKey(s.id))
+    final repaired = repairStopOrder(
+      stopIndices: stopIndices,
+      durations: durations,
+      startMinutes: startMin,
+      deadlineMinutesByNode: deadlinesByNode,
+    );
+
+    return repaired.map((idx) => allLocations[idx]).toList();
+  }
+
+  /// Attempts to reorder stops so deadline stops are visited earliest-first.
+  /// Non-deadline stops are inserted at cheapest positions (including dwell
+  /// time). Returns the original order if no violations exist.
+  static List<int> repairStopOrder({
+    required List<int> stopIndices,
+    required List<List<int>> durations,
+    required int startMinutes,
+    required Map<int, int> deadlineMinutesByNode,
+    int leeway = _leewayMinutes,
+    int stopDuration = _stopDurationMinutes,
+  }) {
+    // Check for violations in current order
+    final legs = _buildLegs(stopIndices, durations);
+    final arrivals = computeArrivalMinutes(
+      startMinutes, legs, stopIndices.length,
+      leeway: leeway, stopDuration: stopDuration,
+    );
+
+    bool hasViolation = false;
+    for (var i = 0; i < stopIndices.length; i++) {
+      final dl = deadlineMinutesByNode[stopIndices[i]];
+      if (dl != null && arrivals[i] > dl - leeway) {
+        hasViolation = true;
+        break;
+      }
+    }
+    if (!hasViolation) return stopIndices;
+
+    // Split into deadline and non-deadline node indices
+    final withDl = stopIndices
+        .where((n) => deadlineMinutesByNode.containsKey(n))
         .toList();
-    final withoutDl = orderedStops
-        .where((s) => !_deadlines.containsKey(s.id))
+    final withoutDl = stopIndices
+        .where((n) => !deadlineMinutesByNode.containsKey(n))
         .toList();
 
     // Sort deadline stops by deadline time (earliest first)
-    withDl.sort((a, b) {
-      final da = _deadlines[a.id]!;
-      final db = _deadlines[b.id]!;
-      return (da.hour * 60 + da.minute).compareTo(db.hour * 60 + db.minute);
-    });
+    withDl.sort((a, b) =>
+        deadlineMinutesByNode[a]!.compareTo(deadlineMinutesByNode[b]!));
 
     // Start with deadline stops in deadline order
-    final repaired = List<DeliveryLocation>.from(withDl);
+    final repaired = List<int>.from(withDl);
 
     // Insert each non-deadline stop at the cheapest position
     for (final free in withoutDl) {
-      final freeIdx = allLocations.indexOf(free);
       int bestPos = repaired.length;
-      int bestExtra = _insertionCost(
-        repaired, bestPos, freeIdx, allLocations, durations,
+      int bestCost = _nodeInsertionCost(
+        repaired, bestPos, free, durations, stopDuration,
       );
 
       for (var pos = 0; pos < repaired.length; pos++) {
-        final extra = _insertionCost(
-          repaired, pos, freeIdx, allLocations, durations,
+        final cost = _nodeInsertionCost(
+          repaired, pos, free, durations, stopDuration,
         );
-        if (extra < bestExtra) {
-          bestExtra = extra;
+        if (cost < bestCost) {
+          bestCost = cost;
           bestPos = pos;
         }
       }
@@ -294,24 +314,31 @@ class RouteProvider extends ChangeNotifier {
     return repaired;
   }
 
-  /// Extra travel time (seconds) from inserting [nodeIdx] at [pos] in the route.
-  int _insertionCost(
-    List<DeliveryLocation> route,
+  /// Build leg durations (seconds) for a stop order. Depot is node 0.
+  static List<int> _buildLegs(List<int> stops, List<List<int>> durations) {
+    final legs = <int>[];
+    var prev = 0; // depot
+    for (final s in stops) {
+      legs.add(durations[prev][s]);
+      prev = s;
+    }
+    legs.add(durations[prev][0]); // return to depot
+    return legs;
+  }
+
+  /// Extra time (seconds) from inserting [nodeIdx] at [pos], including dwell.
+  static int _nodeInsertionCost(
+    List<int> route,
     int pos,
     int nodeIdx,
-    List<DeliveryLocation> allLocations,
     List<List<int>> durations,
+    int stopDuration,
   ) {
-    final prevIdx = pos == 0
-        ? 0 // depot
-        : allLocations.indexOf(route[pos - 1]);
-    final nextIdx = pos >= route.length
-        ? 0 // depot (return)
-        : allLocations.indexOf(route[pos]);
-
+    final prevIdx = pos == 0 ? 0 : route[pos - 1];
+    final nextIdx = pos >= route.length ? 0 : route[pos];
     final added = durations[prevIdx][nodeIdx] + durations[nodeIdx][nextIdx];
     final removed = durations[prevIdx][nextIdx];
-    return added - removed;
+    return added - removed + stopDuration * 60;
   }
 
   // --- Static computation helpers (pure functions, testable without Material) ---
