@@ -31,4 +31,5 @@ jobs:
             --allow-unauthenticated \
             --port=8080 \
             --memory=512Mi \
+            --min-instances=1 \
             --set-env-vars="GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}"

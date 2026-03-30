@@ -75,7 +75,7 @@ Future<void> _proxyMapsRequest(HttpRequest request, String apiKey) async {
   }
 }
 
-/// Serves static files from the build/web directory.
+/// Serves static files from the build/web directory with gzip and caching.
 Future<void> _serveStatic(HttpRequest request, Directory webDir) async {
   request.response.headers.set('Access-Control-Allow-Origin', '*');
 
@@ -83,16 +83,35 @@ Future<void> _serveStatic(HttpRequest request, Directory webDir) async {
   if (path == '/') path = '/index.html';
 
   final file = File('${webDir.path}$path');
+  File target;
+  bool isSpaFallback = false;
 
   if (await file.exists()) {
-    final ext = path.split('.').last;
-    request.response.headers.contentType = _contentType(ext);
-    await file.openRead().pipe(request.response);
+    target = file;
   } else {
-    // SPA fallback: serve index.html for unmatched routes
-    final index = File('${webDir.path}/index.html');
-    request.response.headers.contentType = ContentType.html;
-    await index.openRead().pipe(request.response);
+    target = File('${webDir.path}/index.html');
+    isSpaFallback = true;
+  }
+
+  final ext = isSpaFallback ? 'html' : path.split('.').last;
+  request.response.headers.contentType = _contentType(ext);
+
+  // Cache immutable assets (JS, WASM, fonts) aggressively; HTML briefly.
+  if (ext == 'html') {
+    request.response.headers.set('Cache-Control', 'no-cache');
+  } else {
+    request.response.headers.set('Cache-Control', 'public, max-age=604800, immutable');
+  }
+
+  // Gzip compressible content if the client accepts it.
+  final acceptEncoding = request.headers.value('accept-encoding') ?? '';
+  final compressible = {'js', 'css', 'html', 'json', 'svg', 'wasm'};
+
+  if (acceptEncoding.contains('gzip') && compressible.contains(ext)) {
+    request.response.headers.set('Content-Encoding', 'gzip');
+    await target.openRead().transform(gzip.encoder).pipe(request.response);
+  } else {
+    await target.openRead().pipe(request.response);
   }
 }
 

@@ -3,7 +3,7 @@ FROM ghcr.io/cirruslabs/flutter:stable AS build
 WORKDIR /app
 COPY . .
 
-RUN flutter build web
+RUN flutter build web --release --web-renderer html --no-web-resources-cdn
 RUN dart pub get && dart compile exe bin/server.dart -o bin/server
 
 ## Minimal runtime — use Debian slim since 'scratch' needs /runtime/ from dart:stable
