@@ -48,6 +48,32 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _pickDeadline(String stopId) async {
     final provider = context.read<RouteProvider>();
     final current = provider.deadlineFor(stopId);
+
+    if (current != null) {
+      final action = await showDialog<String>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: const Text('Deadline'),
+          children: [
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, 'change'),
+              child: const Text('Change deadline'),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, 'remove'),
+              child: const Text('Remove deadline'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (action == 'remove') {
+        provider.removeDeadline(stopId);
+        return;
+      }
+      if (action != 'change') return;
+    }
+
     final picked = await showTimePicker(
       context: context,
       initialTime: current ?? TimeOfDay.now(),
