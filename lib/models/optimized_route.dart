@@ -14,11 +14,16 @@ class OptimizedRoute {
   /// (0 = depot, then delivery indices).
   final List<int> tourIndices;
 
+  /// Duration in seconds for each leg of the tour:
+  /// [depot→stop1, stop1→stop2, ..., lastStop→depot].
+  final List<int> legDurationSeconds;
+
   const OptimizedRoute({
     required this.orderedStops,
     required this.totalDurationSeconds,
     required this.totalDistanceMeters,
     required this.tourIndices,
+    required this.legDurationSeconds,
   });
 
   String get formattedDuration {

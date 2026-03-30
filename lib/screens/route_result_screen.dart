@@ -1,139 +1,10 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 import '../providers/route_provider.dart';
-import '../services/maps_api_service.dart';
 import '../services/navigation_launcher.dart';
-import '../widgets/route_summary_card.dart';
 
-class RouteResultScreen extends StatefulWidget {
+class RouteResultScreen extends StatelessWidget {
   const RouteResultScreen({super.key});
-
-  @override
-  State<RouteResultScreen> createState() => _RouteResultScreenState();
-}
-
-class _RouteResultScreenState extends State<RouteResultScreen> {
-  Set<Polyline> _polylines = {};
-  bool _loadingPolyline = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadPolyline();
-  }
-
-  Future<void> _loadPolyline() async {
-    final provider = context.read<RouteProvider>();
-    final route = provider.optimizedRoute;
-    final depot = provider.depot;
-    if (route == null || depot == null) return;
-
-    final mapsApi = MapsApiService();
-    final polylineEncoded = await mapsApi.getDirectionsPolyline(
-      origin: depot,
-      destination: depot,
-      waypoints: route.orderedStops,
-    );
-
-    if (polylineEncoded != null && mounted) {
-      final points = _decodePolyline(polylineEncoded);
-      setState(() {
-        _polylines = {
-          Polyline(
-            polylineId: const PolylineId('route'),
-            points: points,
-            color: Theme.of(context).colorScheme.primary,
-            width: 4,
-          ),
-        };
-        _loadingPolyline = false;
-      });
-    } else if (mounted) {
-      setState(() => _loadingPolyline = false);
-    }
-  }
-
-  /// Decodes a Google Maps encoded polyline string into a list of LatLng points.
-  List<LatLng> _decodePolyline(String encoded) {
-    final points = <LatLng>[];
-    var index = 0;
-    var lat = 0;
-    var lng = 0;
-
-    while (index < encoded.length) {
-      var shift = 0;
-      var result = 0;
-      int b;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-
-      shift = 0;
-      result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-
-      points.add(LatLng(lat / 1e5, lng / 1e5));
-    }
-    return points;
-  }
-
-  Set<Marker> _buildMarkers(RouteProvider provider) {
-    final markers = <Marker>{};
-    final depot = provider.depot!;
-    final route = provider.optimizedRoute!;
-
-    // Depot marker
-    markers.add(Marker(
-      markerId: const MarkerId('depot'),
-      position: LatLng(depot.lat, depot.lng),
-      infoWindow: InfoWindow(title: 'Warehouse', snippet: depot.address),
-      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-    ));
-
-    // Numbered stop markers
-    for (var i = 0; i < route.orderedStops.length; i++) {
-      final stop = route.orderedStops[i];
-      markers.add(Marker(
-        markerId: MarkerId(stop.id),
-        position: LatLng(stop.lat, stop.lng),
-        infoWindow: InfoWindow(
-          title: 'Stop ${i + 1}',
-          snippet: stop.address,
-        ),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-      ));
-    }
-
-    return markers;
-  }
-
-  LatLngBounds _computeBounds(RouteProvider provider) {
-    final depot = provider.depot!;
-    final stops = provider.optimizedRoute!.orderedStops;
-    final allLats = [depot.lat, ...stops.map((s) => s.lat)];
-    final allLngs = [depot.lng, ...stops.map((s) => s.lng)];
-
-    return LatLngBounds(
-      southwest: LatLng(
-        allLats.reduce(min) - 0.01,
-        allLngs.reduce(min) - 0.01,
-      ),
-      northeast: LatLng(
-        allLats.reduce(max) + 0.01,
-        allLngs.reduce(max) + 0.01,
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -146,105 +17,100 @@ class _RouteResultScreenState extends State<RouteResultScreen> {
           );
         }
 
-        final markers = _buildMarkers(provider);
-        final bounds = _computeBounds(provider);
+        final arrivalTimes = provider.getArrivalTimes();
+        final lateStopIds = provider.getLateStopIds();
+        final returnTime = provider.getReturnTime();
+        final theme = Theme.of(context);
 
         return Scaffold(
           appBar: AppBar(title: const Text('Optimized Route')),
-          body: Column(
-            children: [
-              RouteSummaryCard(route: route),
-              // Map preview — compact
-              SizedBox(
-                height: 200,
-                child: Stack(
-                  children: [
-                    GoogleMap(
-                      initialCameraPosition: CameraPosition(
-                        target: LatLng(
-                          provider.depot!.lat,
-                          provider.depot!.lng,
-                        ),
-                        zoom: 12,
-                      ),
-                      markers: markers,
-                      polylines: _polylines,
-                      mapToolbarEnabled: false,
-                      zoomControlsEnabled: false,
-                      myLocationButtonEnabled: false,
-                      style: '[{"featureType":"poi","stylers":[{"visibility":"off"}]},{"featureType":"transit","stylers":[{"visibility":"off"}]}]',
-                      onMapCreated: (controller) {
-                        controller.animateCamera(
-                          CameraUpdate.newLatLngBounds(bounds, 50),
-                        );
-                      },
+          body: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            itemCount: route.orderedStops.length + 2,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: theme.colorScheme.primary,
+                    child: const Icon(Icons.warehouse, size: 18, color: Colors.white),
+                  ),
+                  title: Text(
+                    provider.depot!.address,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(provider.startTime != null
+                      ? 'Depart ${provider.startTime!.format(context)}'
+                      : 'Start'),
+                );
+              }
+              if (index == route.orderedStops.length + 1) {
+                return ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: theme.colorScheme.primary,
+                    child: const Icon(Icons.warehouse, size: 18, color: Colors.white),
+                  ),
+                  title: Text(
+                    provider.depot!.address,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(returnTime != null
+                      ? 'Return ${returnTime.format(context)}'
+                      : 'Return'),
+                );
+              }
+
+              final stopIndex = index - 1;
+              final stop = route.orderedStops[stopIndex];
+              final isLate = lateStopIds.contains(stop.id);
+              final arrival = arrivalTimes != null
+                  ? arrivalTimes[stopIndex]
+                  : null;
+              final deadline = provider.deadlineFor(stop.id);
+
+              final parts = <String>[];
+              if (arrival != null) {
+                parts.add('Arrive ${arrival.format(context)}');
+              }
+              if (deadline != null) {
+                parts.add('Deadline ${deadline.format(context)}');
+              }
+              final subtitle = parts.join(' · ');
+
+              return ListTile(
+                leading: CircleAvatar(
+                  backgroundColor:
+                      isLate ? Colors.red.shade100 : theme.colorScheme.primaryContainer,
+                  child: Text(
+                    '$index',
+                    style: TextStyle(
+                      color: isLate ? Colors.red.shade900 : null,
                     ),
-                    if (_loadingPolyline)
-                      const Center(child: CircularProgressIndicator()),
-                  ],
+                  ),
                 ),
-              ),
-              const Divider(height: 1),
-              // Ordered stop list — takes remaining space
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  itemCount: route.orderedStops.length + 2, // +2 for depot start/end
-                  itemBuilder: (context, index) {
-                    if (index == 0) {
-                      // Depot start
-                      return ListTile(
-                        dense: true,
-                        leading: CircleAvatar(
-                          radius: 14,
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          child: const Icon(Icons.warehouse, size: 14, color: Colors.white),
-                        ),
-                        title: Text(
-                          provider.depot!.address,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: const Text('Start'),
-                      );
-                    }
-                    if (index == route.orderedStops.length + 1) {
-                      // Depot end
-                      return ListTile(
-                        dense: true,
-                        leading: CircleAvatar(
-                          radius: 14,
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          child: const Icon(Icons.warehouse, size: 14, color: Colors.white),
-                        ),
-                        title: Text(
-                          provider.depot!.address,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: const Text('Return'),
-                      );
-                    }
-                    final stop = route.orderedStops[index - 1];
-                    return ListTile(
-                      dense: true,
-                      leading: CircleAvatar(
-                        radius: 14,
-                        child: Text(
-                          '$index',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ),
-                      title: Text(
-                        stop.address,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    );
-                  },
+                title: Text(
+                  stop.address,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: isLate
+                      ? TextStyle(color: Colors.red.shade900)
+                      : null,
                 ),
-              ),
-            ],
+                subtitle: subtitle.isNotEmpty
+                    ? Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: isLate ? Colors.red : null,
+                        ),
+                      )
+                    : null,
+                trailing: isLate
+                    ? Icon(Icons.warning_amber,
+                        color: Colors.red.shade700, size: 20)
+                    : null,
+              );
+            },
           ),
           floatingActionButton: FloatingActionButton.extended(
             onPressed: () {
