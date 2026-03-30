@@ -26,6 +26,7 @@ class RouteProvider extends ChangeNotifier {
   TimeOfDay? get startTime => _startTime;
   TimeOfDay? deadlineFor(String stopId) => _deadlines[stopId];
 
+  static const _leewayMinutes = 5;
   static const _depotKey = 'depot';
   static const _stopsKey = 'stops';
   static const _startTimeKey = 'startTime';
@@ -205,56 +206,100 @@ class RouteProvider extends ChangeNotifier {
     }
   }
 
-  /// Nominal arrival times at each ordered stop (no leeway applied).
-  /// Returns null if start time or optimized route is not set.
-  List<TimeOfDay>? getArrivalTimes() {
-    if (_startTime == null || _optimizedRoute == null) return null;
-    final arrivals = <TimeOfDay>[];
-    var currentMinutes = _startTime!.hour * 60 + _startTime!.minute;
-    for (var i = 0; i < _optimizedRoute!.orderedStops.length; i++) {
-      currentMinutes += (_optimizedRoute!.legDurationSeconds[i] / 60).ceil();
-      arrivals.add(TimeOfDay(
-        hour: (currentMinutes ~/ 60) % 24,
-        minute: currentMinutes % 60,
-      ));
+  // --- Static computation helpers (pure functions, testable without Material) ---
+
+  /// Cumulative arrival minutes at each stop, with [leeway] added to departure.
+  static List<int> computeArrivalMinutes(
+    int startMinutes,
+    List<int> legDurationSeconds,
+    int stopCount, {
+    int leeway = _leewayMinutes,
+  }) {
+    final arrivals = <int>[];
+    var current = startMinutes + leeway;
+    for (var i = 0; i < stopCount; i++) {
+      current += (legDurationSeconds[i] / 60).ceil();
+      arrivals.add(current);
     }
     return arrivals;
   }
 
-  /// Stop IDs that will miss their deadline with hidden 5-minute leeway
-  /// applied on both ends (depart 5 min late, arrive 5 min before deadline).
+  /// Total minutes from departure to return at depot (all legs summed).
+  static int computeReturnMinutes(
+    int startMinutes,
+    List<int> legDurationSeconds, {
+    int leeway = _leewayMinutes,
+  }) {
+    var current = startMinutes + leeway;
+    for (final sec in legDurationSeconds) {
+      current += (sec / 60).ceil();
+    }
+    return current;
+  }
+
+  /// Indices of stops whose arrival exceeds (deadline - [leeway]).
+  static Set<int> computeLateIndices(
+    List<int> arrivalMinutes,
+    Map<int, int> deadlineMinutesByIndex, {
+    int leeway = _leewayMinutes,
+  }) {
+    final lateSet = <int>{};
+    for (var i = 0; i < arrivalMinutes.length; i++) {
+      final deadline = deadlineMinutesByIndex[i];
+      if (deadline != null && arrivalMinutes[i] > deadline - leeway) {
+        lateSet.add(i);
+      }
+    }
+    return lateSet;
+  }
+
+  // --- Instance methods (delegate to statics, convert to TimeOfDay for UI) ---
+
+  /// Arrival times at each ordered stop (includes leeway departure buffer).
+  List<TimeOfDay>? getArrivalTimes() {
+    if (_startTime == null || _optimizedRoute == null) return null;
+    final startMinutes = _startTime!.hour * 60 + _startTime!.minute;
+    final minutes = computeArrivalMinutes(
+      startMinutes,
+      _optimizedRoute!.legDurationSeconds,
+      _optimizedRoute!.orderedStops.length,
+    );
+    return minutes
+        .map((m) => TimeOfDay(hour: (m ~/ 60) % 24, minute: m % 60))
+        .toList();
+  }
+
+  /// Stop IDs that will miss their deadline (leeway on both ends).
   Set<String> getLateStopIds() {
     if (_startTime == null || _optimizedRoute == null) return {};
-    const leewayMinutes = 5;
-    final lateIds = <String>{};
-    var currentMinutes =
-        _startTime!.hour * 60 + _startTime!.minute + leewayMinutes;
+    final startMinutes = _startTime!.hour * 60 + _startTime!.minute;
+    final arrivals = computeArrivalMinutes(
+      startMinutes,
+      _optimizedRoute!.legDurationSeconds,
+      _optimizedRoute!.orderedStops.length,
+    );
+    final deadlinesByIndex = <int, int>{};
     for (var i = 0; i < _optimizedRoute!.orderedStops.length; i++) {
-      currentMinutes +=
-          (_optimizedRoute!.legDurationSeconds[i] / 60).ceil();
       final stop = _optimizedRoute!.orderedStops[i];
       final deadline = _deadlines[stop.id];
       if (deadline != null) {
-        final effectiveDeadline =
-            deadline.hour * 60 + deadline.minute - leewayMinutes;
-        if (currentMinutes > effectiveDeadline) {
-          lateIds.add(stop.id);
-        }
+        deadlinesByIndex[i] = deadline.hour * 60 + deadline.minute;
       }
     }
-    return lateIds;
+    final lateIndices = computeLateIndices(arrivals, deadlinesByIndex);
+    return lateIndices
+        .map((i) => _optimizedRoute!.orderedStops[i].id)
+        .toSet();
   }
 
-  /// Estimated return time to the depot (null if no start time or route).
+  /// Estimated return time to depot (includes leeway departure buffer).
   TimeOfDay? getReturnTime() {
     if (_startTime == null || _optimizedRoute == null) return null;
-    var currentMinutes = _startTime!.hour * 60 + _startTime!.minute;
-    for (final legSeconds in _optimizedRoute!.legDurationSeconds) {
-      currentMinutes += (legSeconds / 60).ceil();
-    }
-    return TimeOfDay(
-      hour: (currentMinutes ~/ 60) % 24,
-      minute: currentMinutes % 60,
+    final startMinutes = _startTime!.hour * 60 + _startTime!.minute;
+    final m = computeReturnMinutes(
+      startMinutes,
+      _optimizedRoute!.legDurationSeconds,
     );
+    return TimeOfDay(hour: (m ~/ 60) % 24, minute: m % 60);
   }
 }
