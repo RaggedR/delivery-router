@@ -27,6 +27,7 @@ class RouteProvider extends ChangeNotifier {
   TimeOfDay? deadlineFor(String stopId) => _deadlines[stopId];
 
   static const _leewayMinutes = 5;
+  static const _stopDurationMinutes = 10;
   static const _depotKey = 'depot';
   static const _stopsKey = 'stops';
   static const _startTimeKey = 'startTime';
@@ -171,29 +172,42 @@ class RouteProvider extends ChangeNotifier {
       final result = TspSolver.solve(matrix.durations);
 
       // Map tour indices back to delivery locations (skip depot at start/end).
-      final orderedStops = <DeliveryLocation>[];
+      var orderedStops = <DeliveryLocation>[];
       for (final idx in result.tour) {
         if (idx == 0) continue; // skip depot
         orderedStops.add(allLocations[idx]);
       }
-      // Remove duplicate (last depot) — orderedStops only has stops.
-      // The tour is [0, a, b, c, 0] — we just skipped all 0s above.
 
-      // Calculate total distance and per-leg durations by walking the tour edges.
+      // Repair for deadline violations: if the shortest route misses
+      // deadlines, reorder to visit deadline stops earliest-first and
+      // insert non-deadline stops at cheapest positions.
+      if (_startTime != null && _deadlines.isNotEmpty) {
+        orderedStops = _repairForDeadlines(
+          orderedStops, allLocations, matrix.durations,
+        );
+      }
+
+      // Build tour indices and leg durations from the (possibly repaired) order.
+      final tour = [0];
+      for (final stop in orderedStops) {
+        tour.add(allLocations.indexOf(stop));
+      }
+      tour.add(0);
+
       var totalDistance = 0;
       final legDurations = <int>[];
-      for (var i = 0; i < result.tour.length - 1; i++) {
+      for (var i = 0; i < tour.length - 1; i++) {
         totalDistance +=
-            matrix.distances[result.tour[i]][result.tour[i + 1]];
+            matrix.distances[tour[i]][tour[i + 1]];
         legDurations.add(
-            matrix.durations[result.tour[i]][result.tour[i + 1]]);
+            matrix.durations[tour[i]][tour[i + 1]]);
       }
 
       _optimizedRoute = OptimizedRoute(
         orderedStops: orderedStops,
-        totalDurationSeconds: result.totalCost,
+        totalDurationSeconds: legDurations.fold(0, (a, b) => a + b),
         totalDistanceMeters: totalDistance,
-        tourIndices: result.tour,
+        tourIndices: tour,
         legDurationSeconds: legDurations,
       );
     } on MapsApiException catch (e) {
@@ -206,33 +220,135 @@ class RouteProvider extends ChangeNotifier {
     }
   }
 
+  /// Reorders stops to fix deadline violations. Deadline stops are sorted
+  /// earliest-first; non-deadline stops are inserted at cheapest positions.
+  /// Returns the original order if no violations exist.
+  List<DeliveryLocation> _repairForDeadlines(
+    List<DeliveryLocation> orderedStops,
+    List<DeliveryLocation> allLocations,
+    List<List<int>> durations,
+  ) {
+    final startMin = _startTime!.hour * 60 + _startTime!.minute;
+
+    // Check for violations in current order
+    final tour = [0, ...orderedStops.map((s) => allLocations.indexOf(s)), 0];
+    final legs = <int>[];
+    for (var i = 0; i < tour.length - 1; i++) {
+      legs.add(durations[tour[i]][tour[i + 1]]);
+    }
+    final arrivals = computeArrivalMinutes(
+      startMin, legs, orderedStops.length,
+    );
+
+    bool hasViolation = false;
+    for (var i = 0; i < orderedStops.length; i++) {
+      final dl = _deadlines[orderedStops[i].id];
+      if (dl != null) {
+        final dlMin = dl.hour * 60 + dl.minute;
+        if (arrivals[i] > dlMin - _leewayMinutes) {
+          hasViolation = true;
+          break;
+        }
+      }
+    }
+    if (!hasViolation) return orderedStops;
+
+    // Split into deadline and non-deadline stops
+    final withDl = orderedStops
+        .where((s) => _deadlines.containsKey(s.id))
+        .toList();
+    final withoutDl = orderedStops
+        .where((s) => !_deadlines.containsKey(s.id))
+        .toList();
+
+    // Sort deadline stops by deadline time (earliest first)
+    withDl.sort((a, b) {
+      final da = _deadlines[a.id]!;
+      final db = _deadlines[b.id]!;
+      return (da.hour * 60 + da.minute).compareTo(db.hour * 60 + db.minute);
+    });
+
+    // Start with deadline stops in deadline order
+    final repaired = List<DeliveryLocation>.from(withDl);
+
+    // Insert each non-deadline stop at the cheapest position
+    for (final free in withoutDl) {
+      final freeIdx = allLocations.indexOf(free);
+      int bestPos = repaired.length;
+      int bestExtra = _insertionCost(
+        repaired, bestPos, freeIdx, allLocations, durations,
+      );
+
+      for (var pos = 0; pos < repaired.length; pos++) {
+        final extra = _insertionCost(
+          repaired, pos, freeIdx, allLocations, durations,
+        );
+        if (extra < bestExtra) {
+          bestExtra = extra;
+          bestPos = pos;
+        }
+      }
+      repaired.insert(bestPos, free);
+    }
+
+    return repaired;
+  }
+
+  /// Extra travel time (seconds) from inserting [nodeIdx] at [pos] in the route.
+  int _insertionCost(
+    List<DeliveryLocation> route,
+    int pos,
+    int nodeIdx,
+    List<DeliveryLocation> allLocations,
+    List<List<int>> durations,
+  ) {
+    final prevIdx = pos == 0
+        ? 0 // depot
+        : allLocations.indexOf(route[pos - 1]);
+    final nextIdx = pos >= route.length
+        ? 0 // depot (return)
+        : allLocations.indexOf(route[pos]);
+
+    final added = durations[prevIdx][nodeIdx] + durations[nodeIdx][nextIdx];
+    final removed = durations[prevIdx][nextIdx];
+    return added - removed;
+  }
+
   // --- Static computation helpers (pure functions, testable without Material) ---
 
-  /// Cumulative arrival minutes at each stop, with [leeway] added to departure.
+  /// Cumulative arrival minutes at each stop, with [leeway] added to departure
+  /// and [stopDuration] minutes spent at each stop before driving to the next.
   static List<int> computeArrivalMinutes(
     int startMinutes,
     List<int> legDurationSeconds,
     int stopCount, {
     int leeway = _leewayMinutes,
+    int stopDuration = _stopDurationMinutes,
   }) {
     final arrivals = <int>[];
     var current = startMinutes + leeway;
     for (var i = 0; i < stopCount; i++) {
       current += (legDurationSeconds[i] / 60).ceil();
       arrivals.add(current);
+      current += stopDuration; // time spent at this stop before next leg
     }
     return arrivals;
   }
 
-  /// Total minutes from departure to return at depot (all legs summed).
+  /// Total minutes from departure to return at depot (all legs + stop time).
   static int computeReturnMinutes(
     int startMinutes,
     List<int> legDurationSeconds, {
     int leeway = _leewayMinutes,
+    int stopDuration = _stopDurationMinutes,
   }) {
     var current = startMinutes + leeway;
-    for (final sec in legDurationSeconds) {
-      current += (sec / 60).ceil();
+    for (var i = 0; i < legDurationSeconds.length; i++) {
+      current += (legDurationSeconds[i] / 60).ceil();
+      // Add stop time at each delivery stop (not the final return to depot)
+      if (i < legDurationSeconds.length - 1) {
+        current += stopDuration;
+      }
     }
     return current;
   }
