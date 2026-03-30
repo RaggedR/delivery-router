@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/delivery_location.dart';
 import '../providers/route_provider.dart';
-import '../services/navigation_launcher.dart';
 import '../widgets/address_card.dart';
 import 'place_search_screen.dart';
+import 'route_result_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -34,6 +34,29 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _pickStartTime() async {
+    final provider = context.read<RouteProvider>();
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: provider.startTime ?? TimeOfDay.now(),
+    );
+    if (picked != null && mounted) {
+      provider.setStartTime(picked);
+    }
+  }
+
+  Future<void> _pickDeadline(String stopId) async {
+    final provider = context.read<RouteProvider>();
+    final current = provider.deadlineFor(stopId);
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: current ?? TimeOfDay.now(),
+    );
+    if (picked != null && mounted) {
+      provider.setDeadline(stopId, picked);
+    }
+  }
+
   Future<void> _optimize() async {
     final provider = context.read<RouteProvider>();
     await provider.optimizeRoute();
@@ -44,9 +67,8 @@ class _HomeScreenState extends State<HomeScreen> {
         SnackBar(content: Text(provider.error!)),
       );
     } else if (provider.optimizedRoute != null) {
-      NavigationLauncher.launchRoute(
-        depot: provider.depot!,
-        orderedStops: provider.optimizedRoute!.orderedStops,
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const RouteResultScreen()),
       );
     }
   }
@@ -77,6 +99,14 @@ class _HomeScreenState extends State<HomeScreen> {
               _DepotTile(
                 depot: provider.depot,
                 onTap: () => _searchPlace(isDepot: true),
+              ),
+              // Start time
+              _StartTimeTile(
+                startTime: provider.startTime,
+                onTap: _pickStartTime,
+                onClear: provider.startTime != null
+                    ? () => provider.setStartTime(null)
+                    : null,
               ),
               const Divider(),
               // Stops header
@@ -136,6 +166,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             location: stop,
                             index: index,
                             onDelete: () => provider.removeStop(stop.id),
+                            deadline: provider.deadlineFor(stop.id),
+                            onSetDeadline: () => _pickDeadline(stop.id),
                           );
                         },
                       ),
@@ -198,6 +230,46 @@ class _DepotTile extends StatelessWidget {
       title: Text(depot?.address ?? 'Set warehouse location'),
       subtitle: depot != null ? null : const Text('Tap to search'),
       trailing: const Icon(Icons.chevron_right),
+    );
+  }
+}
+
+class _StartTimeTile extends StatelessWidget {
+  final TimeOfDay? startTime;
+  final VoidCallback onTap;
+  final VoidCallback? onClear;
+
+  const _StartTimeTile({
+    required this.startTime,
+    required this.onTap,
+    this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      onTap: onTap,
+      leading: CircleAvatar(
+        backgroundColor: startTime != null
+            ? Theme.of(context).colorScheme.secondary
+            : Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: Icon(
+          Icons.schedule,
+          color: startTime != null
+              ? Theme.of(context).colorScheme.onSecondary
+              : Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+      title: Text(startTime != null
+          ? 'Depart at ${startTime!.format(context)}'
+          : 'Set departure time'),
+      subtitle: startTime == null ? const Text('Tap to set') : null,
+      trailing: startTime != null
+          ? IconButton(
+              icon: const Icon(Icons.clear, size: 20),
+              onPressed: onClear,
+            )
+          : const Icon(Icons.chevron_right),
     );
   }
 }

@@ -5,12 +5,16 @@ class AddressCard extends StatelessWidget {
   final DeliveryLocation location;
   final int index;
   final VoidCallback onDelete;
+  final TimeOfDay? deadline;
+  final VoidCallback? onSetDeadline;
 
   const AddressCard({
     super.key,
     required this.location,
     required this.index,
     required this.onDelete,
+    this.deadline,
+    this.onSetDeadline,
   });
 
   @override
@@ -27,9 +31,34 @@ class AddressCard extends StatelessWidget {
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
-        trailing: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: onDelete,
+        subtitle: deadline != null
+            ? Text(
+                'by ${deadline!.format(context)}',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.secondary,
+                  fontSize: 12,
+                ),
+              )
+            : null,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: Icon(
+                Icons.schedule,
+                color: deadline != null
+                    ? Theme.of(context).colorScheme.secondary
+                    : null,
+                size: 20,
+              ),
+              tooltip: deadline != null ? 'Change deadline' : 'Set deadline',
+              onPressed: onSetDeadline,
+            ),
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: onDelete,
+            ),
+          ],
         ),
       ),
     );
